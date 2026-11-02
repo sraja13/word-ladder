@@ -17,6 +17,9 @@ The game has:
 - **Three difficulty levels** that set the word length and how many steps the
   shortest solution takes.
 - **Custom puzzles**, where the player picks both words.
+- **Locked letter mode**, where one letter position can never change. This
+  removes words from the graph, so ladders get longer and some puzzles become
+  impossible.
 - **Hints**, which reveal the next word on a shortest path from the player's
   current word. Hints lower the score.
 - **Undo**, for backing out of a dead end.
@@ -41,6 +44,7 @@ thin Dream server exposes it as a JSON API to an HTML/CSS/JavaScript front end.
 |   New game:   [ Easy ]   [ Medium ]   [ Hard ]             |
 |               3 letters  4 letters    5 letters            |
 |               3-4 steps  4-6 steps    6-9 steps            |
+|   Mode:       (•) Classic   ( ) Locked letter              |
 |                                                            |
 |   Custom:     start [ cold ]  target [ warm ]  [ Play ]    |
 |                                                            |
@@ -131,7 +135,44 @@ next to the player's partial ladder:
 `localStorage`. Reloading the page or using **Resume** on the home page
 continues where the player left off.
 
-### 2.3 Solver page
+### 2.3 Locked letter mode
+
+The player selects **Locked letter** on the home page and clicks **Easy**. The
+game picks a puzzle and a position to lock, here the 2nd letter, `o`. Every
+word in the ladder must keep that letter.
+
+```
++------------------------------------------------------------+
+|  COLD  →  HOSE                     Easy · best: 3 steps    |
+|  Locked: 2nd letter = O            c [o] l d               |
+|                                                            |
+|    1. cold                                                 |
+|    2. hold                                                 |
+|                                                            |
+|   Next word: [ ____ ]  [ Submit ]                          |
++------------------------------------------------------------+
+```
+
+The locked letter is shown in a box on every word. Moves are checked against
+one extra rule:
+
+| Player enters | Result |
+|---|---|
+| `hole` | Accepted |
+| `hale` | Rejected: `"hale" changes the locked letter "o"` |
+| `hose` | Accepted, puzzle solved: `cold → hold → hole → hose` |
+
+In a custom game, the player can also choose which position to lock. The
+start and target must already share that letter. If they don't, or no ladder
+connects them under the lock, the game says so:
+
+- `"cold" and "warm" don't share letter 2`
+- `no ladder connects these words without changing letter 2`
+
+Hints, give up and the solver all follow the lock, so a revealed solution
+never breaks the rule.
+
+### 2.4 Solver page
 
 ```
 +------------------------------------------------------------+
@@ -159,6 +200,36 @@ The buckets are an immutable `Map` from pattern to word list. Building it
 takes O(n · L log n), and a neighbor lookup takes O(L log n + k), where k is
 the number of neighbors.
 
+**Building the graph.** Words are nodes, and two words are connected if they
+differ in one letter. We considered three ways to represent this graph:
+
+| Approach | Startup | Memory | Neighbor lookup | Locked letter mode |
+|---|---|---|---|---|
+| A. No index: compare against every word on each lookup | None | Just the word list | O(n · L), slow | Easy: filter while scanning |
+| B. Full graph: precompute every word's neighbor list at startup | Slowest: compute all edges | Largest: every edge stored | O(log n) | Hard: needs a separate graph for each locked position and letter, or filtering anyway |
+| C. Implicit graph (our choice): store only the wildcard buckets, compute neighbors when BFS asks | Fast: one pass over the words | n · L bucket entries | O(L log n + k) | Easy: filter the neighbor function |
+
+We chose **C**. Lookups are almost as fast as with a precomputed graph, and
+the index is smaller and quicker to build. More importantly, the graph is
+never fixed: BFS only sees a neighbor function, so changing the rules means
+passing a different function. Locked letter mode is just a filter:
+
+```ocaml
+let locked_neighbors dict ~pos ~letter word =
+  Dictionary.neighbors dict word
+  |> List.filter (fun w -> w.[pos] = letter)
+```
+
+The same BFS code then finds shortest ladders, hints and distances under the
+lock without any changes. This is also why `Bfs` takes `neighbors` as an
+argument instead of a graph data structure.
+
+Approach B would make sense if the same expensive searches ran many times
+over a fixed graph. Here every search is under 50 ms, and the graph changes
+with the game mode, so precomputing doesn't pay off. If profiling later shows
+neighbor lookups are a bottleneck, we can cache each word's neighbor list in a
+`Map` inside `Dictionary` without changing any interface.
+
 **Breadth-first search.** `Bfs.Make` is a functor over any node type with a
 `compare`. It takes the neighbor function as an argument, so the word graph is
 never built in full: nodes are explored as the search reaches them. The search
@@ -173,6 +244,12 @@ V).
 2. runs one BFS from it to get every reachable word's distance
 3. picks a random target whose distance is in the difficulty's range
 4. retries with a new start, up to a fixed limit, if no target qualifies
+
+In locked letter mode, it also picks a random position to lock and runs the
+BFS with the locked neighbor function, so the target is guaranteed to be
+reachable and the difficulty reflects the locked distance. The generator
+prefers targets whose locked distance is longer than their classic distance,
+so the lock actually changes how the puzzle is solved.
 
 **Two word lists.**
 - `data/common.txt` has about 3,000 familiar 3-5 letter words. Puzzles and
@@ -198,7 +275,7 @@ V).
 |---|---|
 | Nov 9 | Word lists in `data/`. `Dictionary` and `Bfs` implemented with tests. Dream demo working on both laptops. |
 | Nov 16 | `Ladder` and `Solver` implemented with tests, including QCheck tests that every solver result is a valid ladder. `bin/solve.exe` working. |
-| Nov 23 | `Puzzle` generation tuned so each difficulty feels right. `Game` implemented with JSON round-trip tests. |
+| Nov 23 | `Puzzle` generation tuned so each difficulty feels right, for both classic and locked letter mode. `Game` implemented with JSON round-trip tests. |
 | Nov 30 | `Api` and `bin/server.ml`: every endpoint working, tested with `curl`. |
 | Dec 7 | Front end: home, game, win/give-up and solver pages, plus saving to `localStorage`. |
 | Dec 12 | Polish: error messages, styling, at least 90% coverage on `src/`, README with run instructions. |
