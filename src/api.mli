@@ -8,19 +8,26 @@ type env = {
 }
 
 type route =
-  | New_game  (** [{"difficulty": "Easy"}] or [{"start": .., "target": ..}] *)
+  | New_game
+      (** [{"difficulty": "Easy", "mode": "Locked_letter"}] or
+          [{"start": .., "target": .., "lock_position": 1}]. The ["mode"] and
+          ["lock_position"] fields are optional. *)
   | Guess  (** [{"game": .., "word": ..}] *)
   | Hint  (** [{"game": ..}] *)
   | Undo  (** [{"game": ..}] *)
   | Give_up  (** [{"game": ..}] *)
-  | Solve  (** [{"start": .., "target": ..}] *)
+  | Solve  (** [{"start": .., "target": .., "lock_position": 1}] *)
 
 val route_of_path : string -> route option
 (** [route_of_path path] is the route for a path such as ["/api/guess"], or
     [None] if there is no such route. *)
 
 val handle :
-  env -> Random.State.t -> route -> Yojson.Safe.t -> (Yojson.Safe.t, string) result
+  env ->
+  Random.State.t ->
+  route ->
+  Yojson.Safe.t ->
+  (Yojson.Safe.t, string) result
 (** [handle env rng route request] is the JSON response to [request], or an
     error message to send with status 400 if [request] is malformed or the
     move is illegal. Successful game responses include the updated game, the
