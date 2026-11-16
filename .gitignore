@@ -1,2 +1,6 @@
 _build/
 *.install
+_opam/
+_coverage/
+*.coverage
+.DS_Store
