@@ -13,6 +13,22 @@ val load : string -> t
 (** [load path] is the dictionary of the file at [path], one word per line.
     Raises [Sys_error] if the file cannot be read. *)
 
+val with_frequencies : t -> (string * int) list -> t
+(** [with_frequencies dict counts] is [dict] with a usage count for each word,
+    used by {!familiarity}. Counts for words not in [dict] are ignored. *)
+
+val load_frequencies : t -> string -> t
+(** [load_frequencies dict path] reads [path], one ["word<TAB>count"] per line
+    (the format of [data/frequency.txt]), and applies {!with_frequencies}.
+    Raises [Sys_error] if the file cannot be read and [Failure] on a malformed
+    line. *)
+
+val familiarity : t -> string -> float
+(** [familiarity dict word] is how familiar [word] is, in (0, 1]: [1.0] for
+    common words, [0.4] for uncommon words and [0.1] for rare words or words
+    with no count. The tiers are set by the word's rank among the counts in
+    [dict]; the cutoffs and values are tuned by play-testing. *)
+
 val mem : t -> string -> bool
 (** [mem dict word] is whether [word] is in [dict]. *)
 

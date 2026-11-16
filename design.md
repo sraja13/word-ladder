@@ -9,8 +9,9 @@ the same length, and must reach the target by changing one letter at a time.
 Every word along the way must be a real English word.
 
 
+```
 cold → cord → card → ward → warm
-
+```
 
 The game has:
 
@@ -29,14 +30,19 @@ The game has:
 - **A solver page** that shows the shortest ladder between any two words.
 
 The core of the project is a dictionary indexed for fast one-letter-neighbor
-lookups and a generic breadth-first search. The game logic is pure OCaml. A
-thin Dream server exposes it as a JSON API to an HTML/CSS/JavaScript front end.
+lookups and a generic breadth-first search. The search is our **general
+library**, `Search.Bfs` in [`src/search/`](src/search/): a functor that knows
+nothing about words and, through a semiring parameter, can count or weigh all
+shortest paths in one pass (section 3). The game logic is pure OCaml. A thin
+Dream server exposes it as a JSON API (section 2.6) to an HTML/CSS/JavaScript
+front end, and a command line tool (section 2.5) gives the solver without the
+browser.
 
 ## 2. Mock use
 
 ### 2.1 Home page
 
-
+```
 +------------------------------------------------------------+
 |                        WORD LADDER                         |
 |                                                            |
@@ -52,7 +58,7 @@ thin Dream server exposes it as a JSON API to an HTML/CSS/JavaScript front end.
 |   [ Resume saved game ]   (only shown if one is saved)     |
 |   [ Solver ]                                               |
 +------------------------------------------------------------+
-
+```
 
 - **Easy / Medium / Hard** generates a random puzzle and opens the game page.
 - **Play** with custom words checks them first. Errors are shown inline:
@@ -138,30 +144,36 @@ continues where the player left off.
 
 ### 2.3 Locked letter mode
 
-The player selects **Locked letter** on the home page and clicks **Easy**. The
-game picks a puzzle and a position to lock, here the 2nd letter, `o`. Every
-word in the ladder must keep that letter.
+The player selects **Locked letter** on the home page and clicks **Medium**.
+The game picks a puzzle and a position to lock, here the 2nd letter, `o`.
+Every word in the ladder must keep that letter.
 
 ```
 +------------------------------------------------------------+
-|  COLD  →  HOSE                     Easy · best: 3 steps    |
-|  Locked: 2nd letter = O            c [o] l d               |
+|  BOND  →  LOUD                   Medium · best: 4 steps    |
+|  Locked: 2nd letter = O            b [o] n d               |
 |                                                            |
-|    1. cold                                                 |
-|    2. hold                                                 |
+|    1. bond                                                 |
 |                                                            |
 |   Next word: [ ____ ]  [ Submit ]                          |
 +------------------------------------------------------------+
 ```
+
+Without the lock, this puzzle has 4 shortest ladders, and three of them change
+the `o` (for example `bond → band → land → laud → loud`). The lock leaves only
+one, so the player has to find it. This is the kind of puzzle the generator
+prefers in this mode.
 
 The locked letter is shown in a box on every word. Moves are checked against
 one extra rule:
 
 | Player enters | Result |
 |---|---|
-| `hole` | Accepted |
-| `hale` | Rejected: `"hale" changes the locked letter "o"` |
-| `hose` | Accepted, puzzle solved: `cold → hold → hole → hose` |
+| `band` | Rejected: `"band" changes the locked letter "o"` |
+| `fond` | Accepted |
+| `ford` | Accepted |
+| `lord` | Accepted |
+| `loud` | Accepted, puzzle solved: `bond → fond → ford → lord → loud` |
 
 In a custom game, the player can also choose which position to lock. The
 start and target must already share that letter. If they don't, or no ladder
@@ -188,6 +200,96 @@ never breaks the rule.
 
 If the words can't be connected, the page says so.
 
+### 2.5 Command line solver
+
+`bin/solve.exe` runs the same `Solver` as the web app. It is used for testing
+and for checking puzzles by hand.
+
+```
+$ dune exec bin/solve.exe -- cold warm
+cold → cord → card → ward → warm
+4 steps · 6 shortest ladders
+
+$ dune exec bin/solve.exe -- bond loud --lock 2
+bond → fond → ford → lord → loud
+4 steps · 1 shortest ladder with letter 2 locked (4 shortest ladders without the lock)
+
+$ dune exec bin/solve.exe -- cold wrom
+error: "wrom" is not a word
+
+$ dune exec bin/solve.exe -- cold warm --lock 2
+error: "cold" and "warm" don't share letter 2
+
+$ dune exec bin/solve.exe -- cold
+usage: solve.exe START TARGET [--lock POSITION]
+```
+
+Errors print to stderr and exit with status 1. It prints the same ladder as
+hints and the solver page (`Solver.best_ladder`), and the count comes from
+`Solver.stats_from`.
+
+### 2.6 Server API
+
+Every button in the browser is one `POST` to the server. The browser never
+checks a rule itself: it only displays what the server returns. The game state
+is returned with every response, and the browser saves it in `localStorage`
+and sends it back unchanged with the next request. The routes are the
+`Api.route` constructors in [`src/api.mli`](src/api.mli).
+
+| Endpoint | Request body | Used by |
+|---|---|---|
+| `/api/new` | `{"difficulty": "Medium", "mode": "Classic"}` or `{"start": "cold", "target": "warm", "lock_position": 2}` | Easy / Medium / Hard, custom Play |
+| `/api/guess` | `{"game": {…}, "word": "cord"}` | Submit |
+| `/api/hint` | `{"game": {…}}` | Hint |
+| `/api/undo` | `{"game": {…}}` | Undo |
+| `/api/give-up` | `{"game": {…}}` | Give up |
+| `/api/solve` | `{"start": "black", "target": "white"}` | Solver page |
+
+`"mode"` and `"lock_position"` are optional. `"lock_position"` counts from 1,
+as shown to the player.
+
+**Game response.** `/api/new`, `/api/guess`, `/api/hint`, `/api/undo` and
+`/api/give-up` all answer with the same shape. After guessing `cord` in the
+game from section 2.2:
+
+```json
+{
+  "game": { "…": "opaque, stored and sent back by the browser" },
+  "start": "cold",
+  "target": "warm",
+  "difficulty": "Medium",
+  "lock": null,
+  "optimal_steps": 4,
+  "ladder": ["cold", "cord"],
+  "status": "in_progress",
+  "hints_used": 0,
+  "score": 0
+}
+```
+
+In locked letter mode, `"lock"` is `{"position": 2, "letter": "o"}`, again
+counting from 1. A hint
+response also has `"hint": "card"`, and a give-up response has `"status":
+"gave_up"` and `"solution": ["cold", "cord", "card", "ward", "warm"]`. After
+the winning guess, `"status"` is `"won"` and `"score"` is the final score.
+
+**Solve response.**
+
+```json
+{ "steps": 7,
+  "ladder": ["black", "blank", "blink", "clink", "chink", "chine", "whine", "white"] }
+```
+
+**Errors.** A malformed request or an illegal move gets status 400 and the
+message the page shows inline:
+
+```json
+{ "error": "\"cald\" is not a word" }
+```
+
+The same shape carries every message in sections 2.1-2.4, for example
+`"no ladder connects these words without changing letter 2"` from `/api/new`
+or `"No ladder from \"xxxx\" reaches \"warm\". Try undoing."` from `/api/hint`.
 
 ## 3. Algorithm and performance
 
@@ -231,18 +333,38 @@ with the game mode, so precomputing doesn't pay off. If profiling later shows
 neighbor lookups are a bottleneck, we can cache each word's neighbor list in a
 `Map` inside `Dictionary` without changing any interface.
 
-**Breadth-first search.** `Bfs.Make` is a functor over any node type with a
-`compare`. It takes the neighbor function as an argument, so the word graph is
-never built in full: nodes are explored as the search reaches them. The search
-is purely functional. The frontier is a queue built from two lists, the
-visited set and parent pointers are `Map`s, and the path is rebuilt by
-following parent pointers back from the goal. One search costs O((V + E) log
-V).
+**Breadth-first search: the general library.** `Search.Bfs` is its own dune
+library in [`src/search/`](src/search/), with no dependency on the rest of the
+project. `Bfs.Make` is a functor over any node type with a `compare`. It takes
+the neighbor function as an argument, so the word graph is never built in
+full: nodes are explored as the search reaches them. The search is purely
+functional. The frontier is a queue built from two lists, the visited set and
+parent pointers are `Map`s, and the path is rebuilt by following parent
+pointers back from the goal. One search costs O((V + E) log V).
+
+The library also summarizes *all* shortest paths at once. `Bfs.Make(N).Paths`
+is a second functor, over a **semiring**: a type with `zero`, `one`, `plus`
+and `times`. When the search reaches a node from a node one step closer, it
+extends that node's value with `times` (by the node's weight) and merges it
+into the new node's value with `plus`. Choosing the semiring chooses what is
+computed, and the library ships three:
+
+| Semiring | `plus` | `times` | A node's value |
+|---|---|---|---|
+| `Bfs.Count` | `+` | `*` | the number of shortest paths (with every weight 1) |
+| `Bfs.Sum_product` | `+.` | `*.` | the weighted number of shortest paths |
+| `Bfs.Max_product` | `max` | `*.` | the weight of the best shortest path |
+
+The difficulty rating below uses exactly these three. `Bfs.Product` pairs
+two semirings into one, so all three values come from a single search. Other
+users of the library could plug in their own semiring, for example `min` and
+`+` for the cheapest shortest path in a maze with costs on each cell.
 
 **Puzzle generation.** The generator:
 
 1. picks a random start word of the right length from the common-word list
 2. runs one BFS over the full word list to get every reachable word's distance
+   and the path measures described below (`Solver.stats_from`)
 3. collects the targets whose distance is in the difficulty's range
 4. rates those targets by graph structure (described below) and picks one that
    suits the difficulty
@@ -258,10 +380,11 @@ puzzle is solved.
 **Difficulty from graph structure.** The number of steps alone doesn't say how
 hard a puzzle is. Two 5-step puzzles can feel very different if one has dozens
 of solutions and the other has a single narrow path. Within a difficulty's step
-range, we rate each candidate with two measures.
+range, we rate each candidate with three measures.
 
 *Number of shortest solutions.* BFS records a `ways` count for each word, the
-number of shortest paths that reach it:
+number of shortest paths that reach it. This is `Paths(Count)` from the
+library:
 
 - The start word has `ways = 1`.
 - When BFS discovers a new word, it copies the `ways` of the word it came from.
@@ -315,19 +438,20 @@ common:
 | `cold → wold → word → ward → warm` | 0.1 × 1 × 1 = 0.1 |
 
 This gives two more measures, and BFS computes both as it goes, without listing
-every path:
+every path. They are the same search as `ways`, with a different semiring:
 
 - **Weighted solution count:** the sum of the path weights, here 2.1 instead of
   3. It works like `ways`, except that when a path moves on from a word, the
-  count it carries is multiplied by that word's weight.
+  count it carries is multiplied by that word's weight (`Paths(Sum_product)`).
 - **Easiest path weight:** the largest path weight, here 1. A word keeps the
-  best value among the paths reaching it. If this value is low, every shortest
-  solution needs a rare word.
+  best value among the paths reaching it (`Paths(Max_product)`). If this value
+  is low, every shortest solution needs a rare word.
 
 Only shortest ladders are compared. A longer ladder of common words doesn't
 change the rating, so we don't need Dijkstra's algorithm. Hints, give up and
-the solver follow the shortest ladder with the largest weight, so they show
-familiar words whenever a shortest ladder allows it.
+the solver follow the shortest ladder with the largest weight
+(`Solver.best_ladder`), so they show familiar words whenever a shortest ladder
+allows it.
 
 *How easy it is to go wrong.* A BFS from the target gives every word's distance
 to it. A move is good if it gets one step closer. At each word along a shortest
@@ -339,17 +463,28 @@ for a few candidates, to stay within the puzzle generation time target below.
 
 Easy puzzles favor a high weighted solution count, a familiar easiest path and
 a high share of good moves, and Hard puzzles favor the opposite. In locked
-letter mode, every count and weight uses the locked graph. The exact weights will be tuned by playing the generated puzzles.
+letter mode, every count and weight uses the locked graph. `Puzzle.hardness`
+combines the measures into one number, and its weights will be tuned by
+playing the generated puzzles.
 
-**Word lists.**
-- `data/common.txt` has about 3,000 familiar 3-5 letter words. Start and target
-  words come from this list, so players aren't asked to reach obscure words.
-- `data/words.txt` has about 15,000 3-5 letter words from a standard
-  Scrabble-style list. Any word in it is accepted as a guess, so players
-  aren't penalized for knowing unusual words. Searches run over this list, so
-  ladders can pass through rare words and the rating can account for them.
-- `data/frequency.txt` has usage counts from a public word-frequency list. It
-  sets each word's familiarity weight. Words not in it count as rare.
+**Word lists.** All three files are generated once from public sources and
+committed to `data/`. Together they are under 1 MB.
+
+- `data/words.txt` is every 3-5 letter word in the ENABLE list
+  ([`enable1.txt`](https://github.com/dolph/dictionary/blob/master/enable1.txt),
+  a public-domain Scrabble-style word list of 172,819 words): 972 three-letter,
+  3,903 four-letter and 8,636 five-letter words, 13,511 in all. Any word in it
+  is accepted as a guess, so players aren't penalized for knowing unusual
+  words. Searches run over this list, so ladders can pass through rare words
+  and the rating can account for them.
+- `data/frequency.txt` has the usage counts from Peter Norvig's
+  [`count_1w.txt`](https://norvig.com/ngrams/count_1w.txt) (the 333,000 most
+  frequent words in Google's Web Trillion Word Corpus), filtered to the words
+  in `words.txt`. It sets each word's familiarity weight. Words not in it
+  count as rare.
+- `data/common.txt` is the roughly 3,000 words of `words.txt` with the
+  highest counts. Start and target words come from this list, so players
+  aren't asked to reach obscure words.
 
 **Performance targets.**
 - Loading and indexing both lists at server startup takes under 1 second.
@@ -386,15 +521,22 @@ Then open <http://localhost:8080>.
 ## 5. Module interfaces
 
 The commented interfaces are in [`src/`](src/). They are listed from the bottom
-of the dependency order up, so each module only uses the ones above it.
+of the dependency order up, so each module only uses the ones above it. They
+type-check with `dune build @check`.
+
+**General library.** `Search.Bfs` ([`src/search/bfs.mli`](src/search/bfs.mli))
+is a separate dune library, `search`, that the rest of the project depends on.
+It contains no word-specific code: graphs are given as a `neighbors` function,
+nodes through the `NODE` signature, and path summaries through the `SEMIRING`
+signature. `Solver` is the only module that applies it to words.
 
 | Module | Responsibility |
 |---|---|
-| [`Bfs`](src/bfs.mli) | Generic BFS functor. It knows nothing about words, so it is reusable for any graph. |
-| [`Dictionary`](src/dictionary.mli) | Loads word lists, checks membership, finds one-letter neighbors using wildcard buckets |
+| [`Search.Bfs`](src/search/bfs.mli) | **General library.** BFS functor over any graph, plus `Paths`, a functor over a semiring that summarizes all shortest paths, the `Count`, `Sum_product` and `Max_product` semirings, and `Product` to combine them |
+| [`Dictionary`](src/dictionary.mli) | Loads word lists and frequencies, checks membership, finds one-letter neighbors using wildcard buckets, gives each word's familiarity weight |
 | [`Ladder`](src/ladder.mli) | The rules: the lock type, whether a step or a whole ladder is legal, and why not |
-| [`Solver`](src/solver.mli) | `Bfs` applied to words: shortest ladders and distances, with or without a lock |
-| [`Puzzle`](src/puzzle.mli) | Difficulty levels and modes, random puzzle generation, validating custom puzzles |
+| [`Solver`](src/solver.mli) | `Search.Bfs` applied to words: shortest and most familiar ladders, distances, and the difficulty measures (`stats_from`, `forgiveness`), with or without a lock |
+| [`Puzzle`](src/puzzle.mli) | Difficulty levels and modes, the `hardness` rating, random puzzle generation, validating custom puzzles |
 | [`Game`](src/game.mli) | Immutable game state: guess, undo, hint, give up, score, JSON conversion |
 | [`Api`](src/api.mli) | Each endpoint as a pure function from a JSON request to a JSON response |
 
@@ -402,8 +544,9 @@ Executables, to be written:
 
 - `bin/server.ml` loads the word lists, serves `static/` and forwards `/api/*`
   requests to `Api.handle`. It contains no game logic.
-- `bin/solve.ml` is a small command line tool for testing, for example
-  `dune exec bin/solve.exe -- cold warm`, which prints a shortest ladder.
+- `bin/solve.ml` is the command line solver from section 2.5, for example
+  `dune exec bin/solve.exe -- cold warm`. It parses arguments and prints; the
+  work is all in `Solver` and `Puzzle.custom`.
 
 Design decisions:
 
@@ -419,22 +562,62 @@ Design decisions:
   accidentally ignore it.
 - **The lock lives in `Puzzle.t`.** `Game` reads it from one place for guesses,
   hints and give up.
+- **Lock positions count from 0 inside OCaml and from 1 for people.**
+  `Ladder.lock` and `Puzzle.custom` use 0-based positions. `Api` and
+  `bin/solve.ml` convert from the 1-based position the player sees, so the
+  conversion happens in exactly two places.
 - **Errors are values.** Illegal moves return `Error Ladder.step_error` instead
   of raising exceptions. Each error carries the words it needs, so the player
   gets a specific message.
 
 ## 6. Implementation plan
 
-| Target date | Milestone |
-|---|---|
-| Nov 9 | Word lists in `data/`. `Dictionary` and `Bfs` implemented with tests. Dream demo working on both laptops. |
-| Nov 16 | `Ladder` and `Solver` implemented with tests, including QCheck tests that every solver result is a valid ladder. `bin/solve.exe` working. |
-| Nov 23 | `Puzzle` generation with the graph-structure and word-rarity difficulty rating, tuned so each difficulty feels right, for both classic and locked letter mode. `Game` implemented with JSON round-trip tests. |
-| Nov 30 | `Api` and `bin/server.ml`: every endpoint working, tested with `curl`. |
-| Dec 7 | Front end: home, game, win/give-up and solver pages, plus saving to `localStorage`. |
-| Dec 12 | Polish: error messages, styling, at least 90% coverage on `src/`, README with run instructions. |
+**Who owns what.** The work is split evenly: each of us owns about half of
+the OCaml (roughly 1,500 lines with tests, see the table below) and half of
+the front end pages, writes the tests for their own modules, and reviews the
+other's merge requests.
+
+- **Sahana:** `Search.Bfs` (the general library), `Ladder`, `Solver` and
+  `Puzzle`. Front end: the solver page and the win and give-up screens.
+- **Kyle:** `Dictionary`, `Game`, `Api`, `bin/server.ml` and `bin/solve.ml`,
+  plus the word lists, the dune/opam setup and coverage. Front end: the home
+  and game pages and saving to `localStorage`.
+
+| Target date | Milestone | Owner |
+|---|---|---|
+| Nov 9 | Word lists generated into `data/`. `Dictionary` with tests. `Search.Bfs.Make` (`shortest_path`, `distances`) with tests on small hand-built graphs. Dream demo working on both laptops. | Kyle: lists, `Dictionary`. Sahana: `Bfs`. Both: demo. |
+| Nov 16 | `Ladder` with tests. `Solver.shortest_ladder`, `distance` and `distances_from`, with QCheck tests that every result is a valid ladder. `bin/solve.exe` working. Package stanza in `dune-project`, generated `.opam` file, and `bisect_ppx_ng` coverage running with `dune test`. `Dictionary` familiarity weights. | Sahana: `Ladder`, `Solver`. Kyle: `solve.exe`, dune/opam, coverage, familiarity. |
+| Nov 23 | `Bfs.Paths` with the three semirings and `Product`, tested against path counts listed by hand (the section 3 example graph). `Game` with JSON round-trip tests. | Sahana: `Paths`. Kyle: `Game`. |
+| Nov 30 | `Api` with unit tests on `Api.handle`, and `bin/server.ml` with every endpoint checked with `curl`. A bare front end that plays a classic game end to end (home and game pages, no styling). `Solver.best_ladder`, `stats_from` and `forgiveness`. | Kyle: `Api`, server, bare front end. Sahana: `Solver` measures. |
+| Dec 2 | Exam week: no new milestone. | |
+| **Dec 9 (code checkpoint)** | `Puzzle` generation for classic and locked letter mode with a first version of `hardness`. Hint, undo, give up and locked letter display on the game page, plus saving to `localStorage`. `Readme.md` says what works and what doesn't. Coverage report generated. | Sahana: `Puzzle`. Kyle: game page. Both: Readme. |
+| Dec 14 | Solver page. Win and give-up screens. Tune `hardness` and the familiarity tiers by playing generated puzzles at each difficulty. | Sahana: pages. Both: tuning. |
+| Dec 16 (first demo slot) | Polish: error messages, styling, at least 90% coverage on `src/`, `Readme.md` with build and run instructions, and `opam install . --deps-only --working-dir` checked on a fresh switch. | Both |
+
+**Expected size.** Rough estimates of OCaml lines, including tests, to check
+the scope against the course guideline of 1,000-2,000 lines per person:
+
+| Part | Owner | Code | Tests |
+|---|---|---|---|
+| `Search.Bfs` (library) | Sahana | 250 | 200 |
+| `Ladder` | Sahana | 120 | 150 |
+| `Solver` | Sahana | 250 | 200 |
+| `Puzzle` | Sahana | 300 | 150 |
+| **Sahana** | | **920** | **700** |
+| `Dictionary` | Kyle | 150 | 150 |
+| `Game` | Kyle | 200 | 200 |
+| `Api` | Kyle | 300 | 200 |
+| `bin/server.ml` | Kyle | 80 | — |
+| `bin/solve.ml` | Kyle | 60 | — |
+| **Kyle** | | **790** | **550** |
+| **Total** | | **1,710** | **1,250** |
+
+That is about 1,600 lines for Sahana and 1,350 for Kyle, who also takes the
+dune/opam and coverage setup. The HTML, CSS and JavaScript front end is not
+counted, since it holds no game logic, and its pages are split between us.
 
 Stretch goals, if time allows:
 - a daily puzzle that is the same for everyone, seeded by the date
 - a timer mode
-- showing how many shortest solutions exist
+- showing how many shortest solutions exist (already computed by
+  `Solver.stats_from`)
