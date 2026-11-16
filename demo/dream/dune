@@ -1,5 +1,11 @@
-(executable
- (name demo)
+(executables
+ (names demo hello)
  (libraries dream yojson)
  (preprocess
   (pps lwt_ppx)))
+
+(rule
+ (targets hello.ml)
+ (deps hello.eml.ml)
+ (action
+  (run dream_eml %{deps} --workspace %{workspace_root})))
