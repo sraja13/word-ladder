@@ -1,6 +1,6 @@
 (library
  (name word_ladder)
- (libraries yojson)
+ (libraries search yojson)
  (preprocess
   (pps ppx_deriving_yojson))
- (modules_without_implementation bfs dictionary ladder solver puzzle game api))
+ (modules_without_implementation dictionary ladder solver puzzle game api))

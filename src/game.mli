@@ -36,14 +36,14 @@ val undo : t -> t
     start word remains or the game is finished. *)
 
 val hint : Dictionary.t -> t -> (t * string) option
-(** [hint dict game] is the next word on a shortest ladder from the current
-    word to the target that respects the puzzle's lock, with [hints_used]
+(** [hint dict game] is the next word on {!Solver.best_ladder} from the
+    current word to the target that respects the puzzle's lock, with [hints_used]
     increased by one. It is [None] if the current word cannot reach the
     target, in which case the player should undo. *)
 
 val give_up : Dictionary.t -> t -> t
-(** [give_up dict game] ends the game, revealing a shortest solution that
-    respects the puzzle's lock. *)
+(** [give_up dict game] ends the game, revealing {!Solver.best_ladder} from
+    the start word, which respects the puzzle's lock. *)
 
 val score : t -> int
 (** [score game] is 0 unless [game] is [Won]. Otherwise it starts at 100 and
