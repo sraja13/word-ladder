@@ -621,3 +621,13 @@ Stretch goals, if time allows:
 - a timer mode
 - showing how many shortest solutions exist (already computed by
   `Solver.stats_from`)
+- a "hardest puzzle" challenge for each word length, using the two common
+  words that are hardest to connect as the start and target. "Hardest" means
+  the pair with the longest shortest ladder between them, with ties broken by
+  `Puzzle.hardness` (fewest and least familiar shortest solutions). Finding it
+  takes one BFS from every word in `data/common.txt` (about 3,000 searches, a
+  few minutes in total), which is too slow to do per request, so a small
+  script runs it once and commits the result to `data/hardest.txt`. The
+  server only reads that file, and the same pair could also be offered in
+  locked letter mode by rerunning the script with the locked neighbor
+  function.
